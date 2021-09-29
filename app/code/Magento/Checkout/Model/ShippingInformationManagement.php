@@ -16,6 +16,8 @@ use Magento\Framework\Exception\InputException;
 use Magento\Framework\Exception\LocalizedException;
 use Magento\Framework\Exception\NoSuchEntityException;
 use Magento\Framework\Exception\StateException;
+use Magento\Framework\Exception\ValidatorException;
+use Magento\InventoryInStorePickupQuote\Model\Quote\ValidationRule\InStorePickupItemSourceStockQuoteValidationRule;
 use Magento\Quote\Api\CartRepositoryInterface;
 use Magento\Quote\Api\CartTotalRepositoryInterface;
 use Magento\Quote\Api\Data\AddressInterface;
@@ -25,6 +27,7 @@ use Magento\Quote\Api\PaymentMethodManagementInterface;
 use Magento\Quote\Model\Quote;
 use Magento\Quote\Model\Quote\TotalsCollector;
 use Magento\Quote\Model\QuoteAddressValidator;
+use Magento\Quote\Model\QuoteItemStockValidator;
 use Magento\Quote\Model\ShippingAssignmentFactory;
 use Magento\Quote\Model\ShippingFactory;
 use Psr\Log\LoggerInterface as Logger;
@@ -98,6 +101,8 @@ class ShippingInformationManagement implements ShippingInformationManagementInte
      * @var ShippingFactory
      */
     private $shippingFactory;
+    protected InStorePickupItemSourceStockQuoteValidationRule $inStorePickupItemSourceStockQuoteValidation;
+
 
     /**
      * @param PaymentMethodManagementInterface $paymentMethodManagement
@@ -126,7 +131,8 @@ class ShippingInformationManagement implements ShippingInformationManagementInte
         TotalsCollector $totalsCollector,
         CartExtensionFactory $cartExtensionFactory = null,
         ShippingAssignmentFactory $shippingAssignmentFactory = null,
-        ShippingFactory $shippingFactory = null
+        ShippingFactory $shippingFactory = null,
+        InStorePickupItemSourceStockQuoteValidationRule $inStorePickupItemSourceStockQuoteValidation
     ) {
         $this->paymentMethodManagement = $paymentMethodManagement;
         $this->paymentDetailsFactory = $paymentDetailsFactory;
@@ -143,6 +149,7 @@ class ShippingInformationManagement implements ShippingInformationManagementInte
             ->get(ShippingAssignmentFactory::class);
         $this->shippingFactory = $shippingFactory ?: ObjectManager::getInstance()
             ->get(ShippingFactory::class);
+        $this->inStorePickupItemSourceStockQuoteValidation = $inStorePickupItemSourceStockQuoteValidation;
     }
 
     /**
@@ -217,10 +224,33 @@ class ShippingInformationManagement implements ShippingInformationManagementInte
             );
         }
 
+        try {
+            /** @var Quote $quote */
+            $validationErrors = $this->inStorePickupItemSourceStockQuoteValidation->validate($quote);
+            if (isset($validationErrors[0])
+                && count($validationErrors[0]->getErrors()) > 0) {
+                throw new ValidatorException(__(
+                    'One or more cart items are not valid: %1',
+                    implode(' ', $validationErrors[0]->getErrors())
+                ));
+            }
+        } catch (ValidatorException $e) {
+            throw new InputException(
+                __(
+                    'The shipping information was unable to be saved. Verify the cart products and try again. %1',
+                    $e->getMessage()
+                )
+            );
+        } catch (\Exception $e) {
+            $this->logger->critical($e);
+            throw new InputException(__('The shipping information was unable to be saved. Please contact support.'));
+        }
+
         /** @var PaymentDetailsInterface $paymentDetails */
         $paymentDetails = $this->paymentDetailsFactory->create();
         $paymentDetails->setPaymentMethods($this->paymentMethodManagement->getList($cartId));
         $paymentDetails->setTotals($this->cartTotalsRepository->get($cartId));
+
         return $paymentDetails;
     }
 
